@@ -4,7 +4,6 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>尋寶掃碼</title>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     body {
       font-family: Arial, "Noto Sans TC", sans-serif;
@@ -43,8 +42,6 @@
       padding: 14px 18px;
       font-size: 16px;
       cursor: pointer;
-    }
-    .btn-main {
       width: 100%;
     }
     .msg {
@@ -82,12 +79,12 @@
     <div class="card">
       <h1>尋寶掃碼</h1>
       <div class="info">QR 編號：<span id="qrId">讀取中...</span></div>
-      <div class="info">目前狀態：<span id="qrStatus">讀取中...</span></div>
+      <div class="info">目前狀態：<span id="qrStatus">等待領取</span></div>
 
       <label for="threadsId">先輸入你的 Threads 帳號</label>
       <input id="threadsId" type="text" placeholder="例如：lt_letsgo_" />
 
-      <button id="claimBtn" class="btn-main">確認掃碼並領取 1 點</button>
+      <button id="claimBtn">確認掃碼並領取 1 點</button>
 
       <div id="message" class="msg">系統準備中...</div>
       <div class="small">第一版先用手動輸入 Threads 帳號綁定，之後再升級成正式登入。</div>
@@ -95,9 +92,7 @@
   </div>
 
   <script>
-    const SUPABASE_URL = "https://abqqcwiragsdvhnkncti.supabase.co";
-    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFicXFjd2lyYWdzZHZobmtuY3RpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU1MTMxOTgsImV4cCI6MjA5MTA4OTE5OH0.HzVRur6pAj6yyHYu3iuPB9RgTseifzlKCsdZNou3ks8";
-    const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    const API_BASE = "https://threads-hunt-api.vercel.app";
 
     const qrIdEl = document.getElementById("qrId");
     const qrStatusEl = document.getElementById("qrStatus");
@@ -108,13 +103,11 @@
     const params = new URLSearchParams(window.location.search);
     const qrId = params.get("id");
 
-    let currentQr = null;
-
     function setMessage(text) {
       messageEl.textContent = text;
     }
 
-    async function loadQrStatus() {
+    function initPage() {
       if (!qrId) {
         qrIdEl.textContent = "未提供";
         qrStatusEl.textContent = "錯誤";
@@ -124,45 +117,15 @@
       }
 
       qrIdEl.textContent = qrId;
-
-      const { data, error } = await supabaseClient
-        .from("qr_codes")
-        .select("*")
-        .eq("id", qrId)
-        .maybeSingle();
-
-      if (error) {
-        qrStatusEl.textContent = "讀取失敗";
-        claimBtn.disabled = true;
-        setMessage("讀取 QR 狀態失敗：" + error.message);
-        return;
-      }
-
-      if (!data) {
-        qrStatusEl.textContent = "不存在";
-        claimBtn.disabled = true;
-        setMessage("查無此 QR 編號，請確認這個碼是否已正確建立。");
-        return;
-      }
-
-      currentQr = data;
-
-      if (data.is_used) {
-        qrStatusEl.textContent = "已被使用";
-        claimBtn.disabled = true;
-        setMessage("這個 QR Code 已經被使用過了。");
-      } else {
-        qrStatusEl.textContent = "尚未使用";
-        claimBtn.disabled = false;
-        setMessage("這個 QR Code 尚未使用，可以進行領取。");
-      }
+      qrStatusEl.textContent = "待掃碼";
+      setMessage("請輸入 Threads 帳號後領取點數。");
     }
 
     async function claimPoint() {
       const threadsId = threadsIdInput.value.trim();
 
-      if (!qrId || !currentQr) {
-        setMessage("QR 狀態尚未載入完成。");
+      if (!qrId) {
+        setMessage("缺少 QR 編號。");
         return;
       }
 
@@ -175,66 +138,25 @@
       setMessage("處理中，請稍候...");
 
       try {
-        const { data: existingUser, error: findUserError } = await supabaseClient
-          .from("users")
-          .select("*")
-          .eq("threads_id", threadsId)
-          .maybeSingle();
+        const res = await fetch(`${API_BASE}/api/claim`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            qr_id: qrId,
+            threads_id: threadsId
+          })
+        });
 
-        if (findUserError) {
-          throw findUserError;
-        }
+        const data = await res.json();
 
-        let userId = null;
-        let currentPoints = 0;
-
-        if (existingUser) {
-          userId = existingUser.id;
-          currentPoints = existingUser.points || 0;
-        } else {
-          const { data: newUser, error: insertUserError } = await supabaseClient
-            .from("users")
-            .insert([{ threads_id: threadsId, points: 0 }])
-            .select()
-            .single();
-
-          if (insertUserError) {
-            throw insertUserError;
-          }
-
-          userId = newUser.id;
-          currentPoints = 0;
-        }
-
-        const { error: updateQrError } = await supabaseClient
-          .from("qr_codes")
-          .update({ is_used: true })
-          .eq("id", qrId)
-          .eq("is_used", false);
-
-        if (updateQrError) {
-          throw updateQrError;
-        }
-
-        const { error: updateUserError } = await supabaseClient
-          .from("users")
-          .update({ points: currentPoints + 1 })
-          .eq("id", userId);
-
-        if (updateUserError) {
-          throw updateUserError;
-        }
-
-        const { error: logError } = await supabaseClient
-          .from("scan_logs")
-          .insert([{ qr_id: qrId, user_id: userId }]);
-
-        if (logError) {
-          throw logError;
+        if (!res.ok) {
+          throw new Error(data.error || "處理失敗");
         }
 
         qrStatusEl.textContent = "已被使用";
-        setMessage("成功，已幫 @" + threadsId + " 增加 1 點。");
+        setMessage(data.message || `成功，已幫 @${threadsId} 增加 1 點。`);
       } catch (err) {
         setMessage("處理失敗：" + err.message);
         claimBtn.disabled = false;
@@ -242,7 +164,7 @@
     }
 
     claimBtn.addEventListener("click", claimPoint);
-    loadQrStatus();
+    initPage();
   </script>
 </body>
 </html>
